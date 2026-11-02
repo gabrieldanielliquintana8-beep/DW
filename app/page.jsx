@@ -1,43 +1,149 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 export default function Home() {
-  const [form, setForm] = useState({ nome: "", email: "", mensagem: "" });
-  const [status, setStatus] = useState("idle");
+  const [state, setState] = useState("loading");
+  const [email, setEmail] = useState("");
+  const [data, setData] = useState(null);
+  const [erro, setErro] = useState("");
 
-  function handleChange(e) {
-    setForm({ ...form, [e.target.name]: e.target.value });
+  useEffect(() => {
+    carregarDados();
+  }, []);
+
+  async function carregarDados() {
+    try {
+      const res = await fetch("/api/dados");
+      if (res.status === 401) {
+        setState("login");
+        inicializarGoogle();
+        return;
+      }
+      const json = await res.json();
+      if (json.ok) {
+        setData({ headers: json.headers, rows: json.rows });
+        setState("autenticado");
+      } else {
+        setErro(json.erro || "Erro");
+        setState("erro");
+      }
+    } catch {
+      setErro("Erro de conexão");
+      setState("erro");
+    }
   }
 
-  async function handleSubmit(e) {
-    e.preventDefault();
-    setStatus("enviando");
-    const res = await fetch("/api/salvar", {
+  function inicializarGoogle() {
+    if (window.google?.accounts?.id) return renderizarBotao();
+    const s = document.createElement("script");
+    s.src = "https://accounts.google.com/gsi/client";
+    s.async = true;
+    s.defer = true;
+    s.onload = renderizarBotao;
+    document.body.appendChild(s);
+  }
+
+  function renderizarBotao() {
+    window.google.accounts.id.initialize({
+      client_id: process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID,
+      callback: handleCredential,
+    });
+    const el = document.getElementById("g_id_signin");
+    if (el) {
+      window.google.accounts.id.renderButton(el, {
+        theme: "outline",
+        size: "large",
+        text: "signin_with",
+        locale: "pt-BR",
+      });
+    }
+  }
+
+  async function handleCredential(response) {
+    const res = await fetch("/api/auth/login", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(form),
+      body: JSON.stringify({ credential: response.credential }),
     });
-    const data = await res.json();
-    setStatus(data.ok ? "ok" : "erro");
-    if (data.ok) setForm({ nome: "", email: "", mensagem: "" });
+    const json = await res.json();
+    if (json.ok) {
+      setEmail(json.email);
+      carregarDados();
+    } else {
+      setErro(json.erro || "Falha no login");
+      setState("erro");
+    }
+  }
+
+  async function sair() {
+    await fetch("/api/auth/logout", { method: "POST" });
+    setData(null);
+    setEmail("");
+    setState("login");
+    inicializarGoogle();
+  }
+
+  if (state === "loading") {
+    return <main style={{ padding: 40, fontFamily: "system-ui" }}>Carregando…</main>;
+  }
+
+  if (state === "login") {
+    return (
+      <main style={{ maxWidth: 420, margin: "6rem auto", padding: "0 1rem", fontFamily: "system-ui", textAlign: "center" }}>
+        <h1>Acesso restrito</h1>
+        <p style={{ color: "#555", fontSize: 14 }}>
+          Faça login com uma conta autorizada para visualizar os dados.
+        </p>
+        <div id="g_id_signin" style={{ display: "flex", justifyContent: "center", marginTop: 24 }} />
+      </main>
+    );
+  }
+
+  if (state === "erro") {
+    return (
+      <main style={{ maxWidth: 480, margin: "6rem auto", padding: "0 1rem", fontFamily: "system-ui", textAlign: "center" }}>
+        <h1>Não foi possível acessar</h1>
+        <p style={{ color: "#c00" }}>{erro}</p>
+        <button onClick={sair} style={{ marginTop: 16, padding: "8px 16px", cursor: "pointer" }}>
+          Voltar
+        </button>
+      </main>
+    );
   }
 
   return (
-    <main style={{ maxWidth: 480, margin: "4rem auto", fontFamily: "system-ui" }}>
-      <h1>Cadastro Seguro</h1>
-      <p style={{ fontSize: 14, color: "#555" }}>
-        Seus dados são anonimizados no servidor antes de serem armazenados.
-      </p>
-      <form onSubmit={handleSubmit} style={{ display: "grid", gap: 12 }}>
-        <input name="nome" placeholder="Nome" value={form.nome} onChange={handleChange} required />
-        <input name="email" type="email" placeholder="E-mail" value={form.email} onChange={handleChange} required />
-        <textarea name="mensagem" placeholder="Mensagem (opcional)" value={form.mensagem} onChange={handleChange} rows={4} />
-        <button type="submit" disabled={status === "enviando"}>
-          {status === "enviando" ? "Enviando..." : "Enviar"}
-        </button>
-      </form>
-      {status === "ok" && <p style={{ color: "green" }}>Salvo com sucesso! Seus dados foram anonimizados.</p>}
-      {status === "erro" && <p style={{ color: "red" }}>Erro ao salvar. Tente novamente.</p>}
+    <main style={{ padding: "2rem", fontFamily: "system-ui" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
+        <div>
+          <h1 style={{ margin: 0 }}>Dados</h1>
+          <p style={{ margin: "4px 0 0", fontSize: 13, color: "#666" }}>Logado como {email}</p>
+        </div>
+        <button onClick={sair} style={{ padding: "8px 16px", cursor: "pointer" }}>Sair</button>
+      </div>
+      {!data || data.rows.length === 0 ? (
+        <p>Nenhum dado disponível.</p>
+      ) : (
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
+            <thead>
+              <tr style={{ background: "#f3f4f6", textAlign: "left" }}>
+                {data.headers.map((h, i) => (
+                  <th key={i} style={{ padding: "8px 12px", borderBottom: "1px solid #ddd" }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {data.rows.map((row, i) => (
+                <tr key={i} style={{ borderBottom: "1px solid #eee" }}>
+                  {data.headers.map((_, j) => (
+                    <td key={j} style={{ padding: "8px 12px" }}>{row[j] ?? ""}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </main>
   );
 }
