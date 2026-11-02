@@ -17,12 +17,13 @@ function isoFromDate(d) {
 
 export default function Home() {
   const router = useRouter();
+
+  // ---- Todos os hooks PRIMEIRO (nunca depois de return) ----
   const [state, setState] = useState("loading");
   const [data, setData] = useState(null);
   const [email, setEmail] = useState("");
   const [erro, setErro] = useState("");
   const [busca, setBusca] = useState("");
-
   const [filtroSimples, setFiltroSimples] = useState("");
   const [filtroA, setFiltroA] = useState("");
   const [filtroB, setFiltroB] = useState("");
@@ -31,23 +32,94 @@ export default function Home() {
   const [togglingId, setTogglingId] = useState(null);
   const [diaSelecionado, setDiaSelecionado] = useState(null);
 
-  useEffect(() => { carregarDados(); }, []);
+  useEffect(() => {
+    carregarDados();
+  }, []);
 
+  const filtrados = useMemo(() => {
+    const pacientes = data?.patients || [];
+    let result = pacientes;
+    if (busca) {
+      result = result.filter((p) =>
+        String(p.id).toLowerCase().includes(busca.toLowerCase())
+      );
+    }
+    if (filtroSimples) {
+      const m = MANIFESTACOES.find((x) => x.key === filtroSimples);
+      if (m) result = result.filter((p) => temManifestacao(p, m));
+    }
+    if (filtroA && filtroB) {
+      const mA = MANIFESTACOES.find((x) => x.key === filtroA);
+      const mB = MANIFESTACOES.find((x) => x.key === filtroB);
+      if (mA && mB) {
+        result = result.filter((p) => {
+          const temA = temManifestacao(p, mA);
+          const temB = temManifestacao(p, mB);
+          return uniaoTipo === "E" ? temA && temB : temA || temB;
+        });
+      }
+    }
+    return result;
+  }, [data, busca, filtroSimples, filtroA, filtroB, uniaoTipo]);
+
+  const dias = useMemo(() => {
+    const hoje = new Date();
+    hoje.setHours(0, 0, 0, 0);
+    const arr = [];
+    for (let i = 0; i < 30; i++) {
+      const d = new Date(hoje);
+      d.setDate(d.getDate() + i);
+      arr.push(d);
+    }
+    return arr;
+  }, []);
+
+  const consultasPorDia = useMemo(() => {
+    const map = new Map();
+    for (const p of filtrados) {
+      const raw = p.values["Agenda||Proxima_consulta"] || "";
+      const d = parseDate(raw);
+      if (!d) continue;
+      d.setHours(0, 0, 0, 0);
+      const key = isoFromDate(d);
+      if (!map.has(key)) map.set(key, []);
+      map.get(key).push(p);
+    }
+    return map;
+  }, [filtrados]);
+
+  const hojeKey = useMemo(() => isoFromDate(new Date()), []);
+
+  // ---- Funções auxiliares ----
   async function carregarDados() {
     try {
       const res = await fetch("/api/dados");
-      if (res.status === 401) { setState("login"); inicializarGoogle(); return; }
+      if (res.status === 401) {
+        setState("login");
+        inicializarGoogle();
+        return;
+      }
       const json = await res.json();
-      if (json.ok) { setData(json); setState("autenticado"); }
-      else { setErro(json.erro || "Erro"); setState("erro"); }
-    } catch { setErro("Erro de conexão"); setState("erro"); }
+      if (json.ok) {
+        setData(json);
+        setState("autenticado");
+      } else {
+        setErro(json.erro || "Erro");
+        setState("erro");
+      }
+    } catch {
+      setErro("Erro de conexão");
+      setState("erro");
+    }
   }
 
   function inicializarGoogle() {
     if (window.google?.accounts?.id) return renderizarBotao();
     const s = document.createElement("script");
     s.src = "https://accounts.google.com/gsi/client";
-    s.async = true; s.defer = true; s.onload = renderizarBotao;
+    s.async = true;
+    s.defer = true;
+    s.onload = renderizarBotao;
     document.body.appendChild(s);
   }
 
@@ -57,7 +129,14 @@ export default function Home() {
       callback: handleCredential,
     });
     const el = document.getElementById("g_id_signin");
-    if (el) window.google.accounts.id.renderButton(el, { theme: "outline", size: "large", text: "signin_with", locale: "pt-BR" });
+    if (el) {
+      window.google.accounts.id.renderButton(el, {
+        theme: "outline",
+        size: "large",
+        text: "signin_with",
+        locale: "pt-BR",
+      });
+    }
   }
 
   async function handleCredential(response) {
@@ -67,13 +146,20 @@ export default function Home() {
       body: JSON.stringify({ credential: response.credential }),
     });
     const json = await res.json();
-    if (json.ok) { setEmail(json.email); carregarDados(); }
-    else { setErro(json.erro || "Falha no login"); setState("erro"); }
+    if (json.ok) {
+      setEmail(json.email);
+      carregarDados();
+    } else {
+      setErro(json.erro || "Falha no login");
+      setState("erro");
+    }
   }
 
   async function sair() {
     await fetch("/api/auth/logout", { method: "POST" });
-    setData(null); setState("login"); inicializarGoogle();
+    setData(null);
+    setState("login");
+    inicializarGoogle();
   }
 
   async function toggleControle(patient, field) {
@@ -101,19 +187,36 @@ export default function Home() {
           ),
         }));
       }
-    } catch {} finally { setTogglingId(null); }
+    } catch {
+      // silencioso
+    } finally {
+      setTogglingId(null);
+    }
   }
 
-  function irParaPaciente(pid) { router.push(`/paciente/${encodeURIComponent(pid)}`); }
-  function limparFiltros() { setBusca(""); setFiltroSimples(""); setFiltroA(""); setFiltroB(""); }
+  function irParaPaciente(pid) {
+    router.push(`/paciente/${encodeURIComponent(pid)}`);
+  }
 
-  if (state === "loading") return <main style={{ padding: 40, fontFamily: "system-ui" }}>Carregando…</main>;
+  function limparFiltros() {
+    setBusca("");
+    setFiltroSimples("");
+    setFiltroA("");
+    setFiltroB("");
+  }
+
+  // ---- Só agora os returns condicionais ----
+  if (state === "loading") {
+    return <main style={{ padding: 40, fontFamily: "system-ui" }}>Carregando…</main>;
+  }
 
   if (state === "login") {
     return (
       <main style={{ maxWidth: 420, margin: "6rem auto", padding: "0 1rem", fontFamily: "system-ui", textAlign: "center" }}>
         <h1>Acesso restrito</h1>
-        <p style={{ color: "#555", fontSize: 14 }}>Faça login com uma conta autorizada para visualizar os dados.</p>
+        <p style={{ color: "#555", fontSize: 14 }}>
+          Faça login com uma conta autorizada para visualizar os dados.
+        </p>
         <div id="g_id_signin" style={{ display: "flex", justifyContent: "center", marginTop: 24 }} />
       </main>
     );
@@ -129,56 +232,11 @@ export default function Home() {
     );
   }
 
-  const { patients } = data;
-
-  let filtrados = patients;
-  if (busca) filtrados = filtrados.filter((p) => String(p.id).toLowerCase().includes(busca.toLowerCase()));
-  if (filtroSimples) {
-    const m = MANIFESTACOES.find((x) => x.key === filtroSimples);
-    if (m) filtrados = filtrados.filter((p) => temManifestacao(p, m));
-  }
-  if (filtroA && filtroB) {
-    const mA = MANIFESTACOES.find((x) => x.key === filtroA);
-    const mB = MANIFESTACOES.find((x) => x.key === filtroB);
-    if (mA && mB) {
-      filtrados = filtrados.filter((p) => {
-        const temA = temManifestacao(p, mA);
-        const temB = temManifestacao(p, mB);
-        return uniaoTipo === "E" ? temA && temB : temA || temB;
-      });
-    }
-  }
-
+  const pacientes = data?.patients || [];
+  const pacientesDoDiaSelecionado = diaSelecionado
+    ? consultasPorDia.get(diaSelecionado) || []
+    : [];
   const temFiltroAtivo = busca || filtroSimples || (filtroA && filtroB);
-
-  // --- Calendário dos próximos 30 dias ---
-  const dias = useMemo(() => {
-    const hoje = new Date();
-    hoje.setHours(0, 0, 0, 0);
-    const arr = [];
-    for (let i = 0; i < 30; i++) {
-      const d = new Date(hoje);
-      d.setDate(d.getDate() + i);
-      arr.push(d);
-    }
-    return arr;
-  }, []);
-
-  const consultasPorDia = useMemo(() => {
-    const map = new Map();
-    for (const p of filtrados) {
-      const raw = p.values["Agenda||Proxima_consulta"] || "";
-      const d = parseDate(raw);
-      if (!d) continue;
-      d.setHours(0, 0, 0, 0);
-      const key = isoFromDate(d);
-      if (!map.has(key)) map.set(key, []);
-      map.get(key).push(p);
-    }
-    return map;
-  }, [filtrados]);
-
-  const pacientesDoDiaSelecionado = diaSelecionado ? (consultasPorDia.get(diaSelecionado) || []) : [];
 
   return (
     <main style={{ padding: "2rem", fontFamily: "system-ui", maxWidth: 1400, margin: "0 auto" }}>
@@ -186,21 +244,28 @@ export default function Home() {
         <div>
           <h1 style={{ margin: 0 }}>Pacientes</h1>
           <p style={{ margin: "4px 0 0", fontSize: 13, color: "#666" }}>
-            {filtrados.length} de {patients.length} registros · logado como {email}
+            {filtrados.length} de {pacientes.length} registros · logado como {email}
           </p>
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <input type="text" placeholder="Buscar por código…" value={busca} onChange={(e) => setBusca(e.target.value)}
-            style={{ padding: "8px 12px", border: "1px solid #ddd", borderRadius: 6, fontSize: 14 }} />
+          <input
+            type="text"
+            placeholder="Buscar por código…"
+            value={busca}
+            onChange={(e) => setBusca(e.target.value)}
+            style={{ padding: "8px 12px", border: "1px solid #ddd", borderRadius: 6, fontSize: 14 }}
+          />
           <button onClick={sair} style={{ padding: "8px 16px", cursor: "pointer" }}>Sair</button>
         </div>
       </div>
 
-      <div style={{
-        marginBottom: 16, padding: "12px 16px", background: "#f9fafb",
-        border: "1px solid #e5e7eb", borderRadius: 10,
-        display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center",
-      }}>
+      <div
+        style={{
+          marginBottom: 16, padding: "12px 16px", background: "#f9fafb",
+          border: "1px solid #e5e7eb", borderRadius: 10,
+          display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center",
+        }}
+      >
         <span style={{ fontSize: 13, fontWeight: 500, color: "#374151" }}>Filtrar por:</span>
         <select value={filtroSimples} onChange={(e) => setFiltroSimples(e.target.value)}
           style={{ padding: "6px 10px", border: "1px solid #d1d5db", borderRadius: 6, fontSize: 13 }}>
@@ -246,13 +311,23 @@ export default function Home() {
           const ultimaDisplay = toBRDisplay(ultima);
 
           return (
-            <div key={p.id} onClick={() => irParaPaciente(p.id)} style={{
-              background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12, padding: 16,
-              cursor: "pointer", transition: "box-shadow 0.15s, transform 0.15s",
-              boxShadow: "0 1px 2px rgba(0,0,0,0.04)", position: "relative",
-            }}
-              onMouseEnter={(e) => { e.currentTarget.style.boxShadow = "0 4px 12px rgba(0,0,0,0.1)"; e.currentTarget.style.transform = "translateY(-2px)"; }}
-              onMouseLeave={(e) => { e.currentTarget.style.boxShadow = "0 1px 2px rgba(0,0,0,0.04)"; e.currentTarget.style.transform = "translateY(0)"; setHoveredIcon(null); }}
+            <div
+              key={p.id}
+              onClick={() => irParaPaciente(p.id)}
+              style={{
+                background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12,
+                padding: 16, cursor: "pointer", transition: "box-shadow 0.15s, transform 0.15s",
+                boxShadow: "0 1px 2px rgba(0,0,0,0.04)", position: "relative",
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.boxShadow = "0 4px 12px rgba(0,0,0,0.1)";
+                e.currentTarget.style.transform = "translateY(-2px)";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.boxShadow = "0 1px 2px rgba(0,0,0,0.04)";
+                e.currentTarget.style.transform = "translateY(0)";
+                setHoveredIcon(null);
+              }}
             >
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
                 <strong style={{ fontSize: 18 }}>Paciente #{p.id}</strong>
@@ -293,10 +368,10 @@ export default function Home() {
                           {detalhes.length === 0
                             ? <div style={{ opacity: 0.7, fontStyle: "italic" }}>Sem detalhes registrados.</div>
                             : detalhes.map((d) => (
-                              <div key={d.field} style={{ marginTop: 4 }}>
-                                <span style={{ color: "#9ca3af" }}>{d.label}: </span><span>{d.value}</span>
-                              </div>
-                            ))
+                                <div key={d.field} style={{ marginTop: 4 }}>
+                                  <span style={{ color: "#9ca3af" }}>{d.label}: </span><span>{d.value}</span>
+                                </div>
+                              ))
                           }
                         </div>
                       )}
@@ -327,7 +402,10 @@ export default function Home() {
               </div>
 
               {(proximaDisplay || ultimaDisplay) && (
-                <div style={{ marginTop: 10, paddingTop: 8, borderTop: "1px solid #f3f4f6", fontSize: 10.5, color: "#9ca3af", lineHeight: 1.5 }}>
+                <div style={{
+                  marginTop: 10, paddingTop: 8, borderTop: "1px solid #f3f4f6",
+                  fontSize: 10.5, color: "#9ca3af", lineHeight: 1.5,
+                }}>
                   {proximaDisplay && <div>📅 Próxima: {proximaDisplay}</div>}
                   {ultimaDisplay && <div>🕐 Última: {ultimaDisplay}</div>}
                 </div>
@@ -341,7 +419,6 @@ export default function Home() {
         <p style={{ marginTop: 40, color: "#999", textAlign: "center" }}>Nenhum paciente encontrado.</p>
       )}
 
-      {/* Calendário de 30 dias */}
       <div style={{ marginTop: 40, padding: "20px 24px", background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12 }}>
         <div style={{ fontSize: 15, fontWeight: 600, color: "#111827", marginBottom: 4, display: "flex", alignItems: "center", gap: 8 }}>
           <span>📅</span><span>Próximas consultas (30 dias)</span>
@@ -354,8 +431,7 @@ export default function Home() {
           {DIAS_SEMANA.map((d) => (
             <div key={d} style={{ fontSize: 11, fontWeight: 600, color: "#9ca3af", textAlign: "center", padding: "4px 0" }}>{d}</div>
           ))}
-          {/* Espaços em branco antes do primeiro dia, para alinhar com o dia da semana */}
-          {Array.from({ length: dias[0].getDay() }).map((_, i) => (
+          {Array.from({ length: dias.length > 0 ? dias[0].getDay() : 0 }).map((_, i) => (
             <div key={`pad-${i}`} />
           ))}
           {dias.map((d) => {
@@ -363,7 +439,7 @@ export default function Home() {
             const lista = consultasPorDia.get(key) || [];
             const tem = lista.length > 0;
             const selecionado = diaSelecionado === key;
-            const isHoje = key === isoFromDate(new Date());
+            const isHoje = key === hojeKey;
             return (
               <button
                 key={key}
