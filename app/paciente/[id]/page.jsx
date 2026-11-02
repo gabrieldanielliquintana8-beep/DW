@@ -10,6 +10,9 @@ import {
   limparTexto,
   getFieldConfig,
   getPOL,
+  DATE_FIELDS,
+  toInputDate,
+  toBRDisplay,
 } from "@/lib/patients";
 
 const INPUT_STYLE = {
@@ -39,22 +42,11 @@ export default function PacientePage() {
     (async () => {
       try {
         const res = await fetch("/api/dados");
-        if (res.status === 401) {
-          router.push("/");
-          return;
-        }
+        if (res.status === 401) { router.push("/"); return; }
         const json = await res.json();
-        if (!json.ok) {
-          setErro(json.erro || "Erro");
-          setState("erro");
-          return;
-        }
+        if (!json.ok) { setErro(json.erro || "Erro"); setState("erro"); return; }
         const p = json.patients.find((x) => String(x.id) === String(id));
-        if (!p) {
-          setErro("Paciente não encontrado.");
-          setState("erro");
-          return;
-        }
+        if (!p) { setErro("Paciente não encontrado."); setState("erro"); return; }
         setPatient(p);
         setTopics(json.topics);
         setColumns(json.columns);
@@ -70,8 +62,7 @@ export default function PacientePage() {
     const initial = {};
     for (const c of columns) {
       if (!c.subtopic) continue;
-      const key = `${c.topic}||${c.subtopic}`;
-      initial[key] = patient.values[key] || "";
+      initial[`${c.topic}||${c.subtopic}`] = patient.values[`${c.topic}||${c.subtopic}`] || "";
     }
     setDraft(initial);
     setEditing(true);
@@ -80,14 +71,16 @@ export default function PacientePage() {
   }
 
   function cancelEdit() {
-    setEditing(false);
-    setDraft({});
-    setSaveError("");
-    setSaveOk(false);
+    setEditing(false); setDraft({}); setSaveError(""); setSaveOk(false);
   }
 
   function setField(key, value) {
     setDraft((d) => ({ ...d, [key]: value }));
+  }
+
+  function normalizeForCompare(key, value) {
+    if (DATE_FIELDS.has(key)) return toInputDate(value);
+    return String(value ?? "");
   }
 
   async function saveEdits() {
@@ -96,10 +89,10 @@ export default function PacientePage() {
       if (!c.subtopic) continue;
       const key = `${c.topic}||${c.subtopic}`;
       if (key === "POL||ID") continue;
-      const oldValue = patient.values[key] || "";
-      const newValue = draft[key] ?? "";
-      if (oldValue !== newValue) {
-        edits.push({ topic: c.topic, subtopic: c.subtopic, oldValue, newValue });
+      const oldRaw = patient.values[key] || "";
+      const newRaw = draft[key] ?? "";
+      if (normalizeForCompare(key, oldRaw) !== normalizeForCompare(key, newRaw)) {
+        edits.push({ topic: c.topic, subtopic: c.subtopic, oldValue: oldRaw, newValue: newRaw });
       }
     }
     if (edits.length === 0) { setEditing(false); return; }
@@ -120,9 +113,7 @@ export default function PacientePage() {
         const newValues = { ...patient.values };
         for (const e of edits) newValues[`${e.topic}||${e.subtopic}`] = e.newValue;
         setPatient({ ...patient, values: newValues });
-        setEditing(false);
-        setDraft({});
-        setSaveOk(true);
+        setEditing(false); setDraft({}); setSaveOk(true);
         setTimeout(() => setSaveOk(false), 2500);
       } else {
         setSaveError(json.erro || "Erro ao salvar");
@@ -134,9 +125,7 @@ export default function PacientePage() {
     }
   }
 
-  if (state === "loading") {
-    return <main style={{ padding: 40, fontFamily: "system-ui" }}>Carregando…</main>;
-  }
+  if (state === "loading") return <main style={{ padding: 40, fontFamily: "system-ui" }}>Carregando…</main>;
 
   if (state === "erro") {
     return (
@@ -153,17 +142,40 @@ export default function PacientePage() {
   const etnia = patient.values["Demograficos||Etnia"] || "";
 
   const controleFields = columns.filter((c) => c.topic === "Controle" && c.subtopic);
+  const agendaFields = columns.filter((c) => c.topic === "Agenda" && c.subtopic);
 
   const changedCount = editing
     ? columns.filter((c) => {
         if (!c.subtopic) return false;
         const key = `${c.topic}||${c.subtopic}`;
         if (key === "POL||ID") return false;
-        return (patient.values[key] || "") !== (draft[key] ?? "");
+        return normalizeForCompare(key, patient.values[key] || "") !== normalizeForCompare(key, draft[key] ?? "");
       }).length
     : 0;
 
   const pol = getPOL(patient.id);
+
+  function renderDateField(c) {
+    const key = `${c.topic}||${c.subtopic}`;
+    const val = editing ? (draft[key] ?? "") : (patient.values[key] || "");
+    const iso = toInputDate(val);
+    const display = toBRDisplay(val);
+    if (!editing) {
+      return (
+        <div style={{ fontSize: 14, color: display ? "#111827" : "#9ca3af", paddingTop: 4 }}>
+          {display || "(sem data)"}
+        </div>
+      );
+    }
+    return (
+      <input
+        type="date"
+        value={iso}
+        onChange={(e) => setField(key, e.target.value)}
+        style={{ ...INPUT_STYLE, maxWidth: 220 }}
+      />
+    );
+  }
 
   return (
     <main style={{ padding: "2rem", fontFamily: "system-ui", maxWidth: 960, margin: "0 auto" }}>
@@ -218,7 +230,26 @@ export default function PacientePage() {
         </div>
       </header>
 
-      {/* Painel Controle (TCLE / AGHUSE) */}
+      {/* Agenda (datas) */}
+      {agendaFields.length > 0 && (
+        <div style={{ marginBottom: 16, padding: "12px 16px", background: "#fff", border: "1px solid #e5e7eb", borderRadius: 10 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "#374151", marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}>
+            <span>📅</span><span>Agenda</span>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>
+            {agendaFields.map((c) => (
+              <div key={c.subtopic}>
+                <div style={{ fontSize: 12, color: "#6b7280", fontWeight: 500, marginBottom: 4 }}>
+                  {humanizarSubtopico(c.subtopic)}
+                </div>
+                {renderDateField(c)}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Controle (TCLE / AGHUSE) */}
       {controleFields.length > 0 && (
         <div style={{ marginBottom: 16, padding: "12px 16px", background: "#fff", border: "1px solid #e5e7eb", borderRadius: 10 }}>
           <div style={{ fontSize: 13, fontWeight: 600, color: "#374151", marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}>
@@ -238,9 +269,7 @@ export default function PacientePage() {
                     style={{ width: 18, height: 18, cursor: editing ? "pointer" : "default" }}
                   />
                   <span style={{ fontSize: 14 }}>{humanizarSubtopico(c.subtopic)}</span>
-                  <span style={{ fontSize: 11, color: "#9ca3af" }}>
-                    ({val === "Sim" ? "Sim" : val === "Não" ? "Não" : "—"})
-                  </span>
+                  <span style={{ fontSize: 11, color: "#9ca3af" }}>({val === "Sim" ? "Sim" : val === "Não" ? "Não" : "—"})</span>
                 </label>
               );
             })}
@@ -248,7 +277,7 @@ export default function PacientePage() {
         </div>
       )}
 
-      {topics.filter((t) => t !== "Controle").map((topic) => {
+      {topics.filter((t) => t !== "Controle" && t !== "Agenda").map((topic) => {
         const subs = columns
           .filter((c) => c.topic === topic && c.subtopic)
           .map((c) => ({
@@ -287,6 +316,8 @@ export default function PacientePage() {
                     <dd style={{ margin: 0 }}>
                       {isBlocked ? (
                         <div style={{ fontSize: 14, color: "#9ca3af", paddingTop: 6 }}>{value} <span style={{ fontSize: 11 }}>(bloqueado)</span></div>
+                      ) : config.type === "date" ? (
+                        <input type="date" value={toInputDate(value)} onChange={(e) => setField(s.key, e.target.value)} style={{ ...INPUT_STYLE, maxWidth: 220 }} />
                       ) : config.type === "select" ? (
                         <select value={value} onChange={(e) => setField(s.key, e.target.value)} style={INPUT_STYLE}>
                           {config.options.map((opt) => (
@@ -307,7 +338,6 @@ export default function PacientePage() {
         );
       })}
 
-      {/* Box escondido do POL */}
       <details style={{ marginTop: 32, fontSize: 12, color: "#9ca3af" }}>
         <summary style={{ cursor: "pointer", userSelect: "none" }}>🔒 Informação restrita</summary>
         <div style={{ marginTop: 8, padding: "10px 12px", background: "#f9fafb", border: "1px dashed #d1d5db", borderRadius: 6, fontFamily: "monospace", fontSize: 13, color: "#374151" }}>
