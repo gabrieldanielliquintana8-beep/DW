@@ -1,296 +1,346 @@
 "use client";
 import { useEffect, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import {
-  TOPIC_ICONS,
   MANIFESTACOES,
   temManifestacao,
-  humanizarSubtopico,
-  limparTexto,
-  getFieldConfig,
+  getManifestacaoDetalhes,
 } from "@/lib/patients";
 
-const INPUT_STYLE = {
-  width: "100%",
-  padding: "6px 8px",
-  border: "1px solid #d1d5db",
-  borderRadius: 6,
-  fontSize: 14,
-  fontFamily: "inherit",
-  boxSizing: "border-box",
-};
-
-export default function PacientePage() {
-  const params = useParams();
-  const router = useRouter();
-  const id = params.id;
-
+export default function Home() {
   const [state, setState] = useState("loading");
-  const [patient, setPatient] = useState(null);
-  const [topics, setTopics] = useState([]);
-  const [columns, setColumns] = useState([]);
+  const [data, setData] = useState(null);
+  const [email, setEmail] = useState("");
   const [erro, setErro] = useState("");
+  const [busca, setBusca] = useState("");
 
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState({});
-  const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState("");
-  const [saveOk, setSaveOk] = useState(false);
+  const [filtroSimples, setFiltroSimples] = useState("");
+  const [filtroA, setFiltroA] = useState("");
+  const [filtroB, setFiltroB] = useState("");
+  const [uniaoTipo, setUniaoTipo] = useState("E");
+  const [hoveredIcon, setHoveredIcon] = useState(null);
 
   useEffect(() => {
-    (async () => {
-      try {
-        const res = await fetch("/api/dados");
-        if (res.status === 401) {
-          router.push("/");
-          return;
-        }
-        const json = await res.json();
-        if (!json.ok) {
-          setErro(json.erro || "Erro");
-          setState("erro");
-          return;
-        }
-        const p = json.patients.find((x) => String(x.id) === String(id));
-        if (!p) {
-          setErro("Paciente não encontrado.");
-          setState("erro");
-          return;
-        }
-        setPatient(p);
-        setTopics(json.topics);
-        setColumns(json.columns);
-        setState("ok");
-      } catch {
-        setErro("Erro de conexão");
-        setState("erro");
-      }
-    })();
-  }, [id, router]);
+    carregarDados();
+  }, []);
 
-  function startEdit() {
-    const initial = {};
-    for (const c of columns) {
-      if (!c.subtopic) continue;
-      const key = `${c.topic}||${c.subtopic}`;
-      initial[key] = patient.values[key] || "";
-    }
-    setDraft(initial);
-    setEditing(true);
-    setSaveError("");
-    setSaveOk(false);
-  }
-
-  function cancelEdit() {
-    setEditing(false);
-    setDraft({});
-    setSaveError("");
-    setSaveOk(false);
-  }
-
-  function setField(key, value) {
-    setDraft((d) => ({ ...d, [key]: value }));
-  }
-
-  async function saveEdits() {
-    const edits = [];
-    for (const c of columns) {
-      if (!c.subtopic) continue;
-      const key = `${c.topic}||${c.subtopic}`;
-      if (key === "POL||ID") continue;
-      const oldValue = patient.values[key] || "";
-      const newValue = draft[key] ?? "";
-      if (oldValue !== newValue) {
-        edits.push({
-          topic: c.topic,
-          subtopic: c.subtopic,
-          oldValue,
-          newValue,
-        });
-      }
-    }
-
-    if (edits.length === 0) {
-      setEditing(false);
-      return;
-    }
-
-    setSaving(true);
-    setSaveError("");
-    setSaveOk(false);
+  async function carregarDados() {
     try {
-      const res = await fetch("/api/atualizar", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          patientId: patient.id,
-          spreadsheetRow: patient.spreadsheetRow,
-          edits,
-        }),
-      });
+      const res = await fetch("/api/dados");
+      if (res.status === 401) {
+        setState("login");
+        inicializarGoogle();
+        return;
+      }
       const json = await res.json();
       if (json.ok) {
-        const newValues = { ...patient.values };
-        for (const e of edits) {
-          newValues[`${e.topic}||${e.subtopic}`] = e.newValue;
-        }
-        setPatient({ ...patient, values: newValues });
-        setEditing(false);
-        setDraft({});
-        setSaveOk(true);
-        setTimeout(() => setSaveOk(false), 2500);
+        setData(json);
+        setState("autenticado");
       } else {
-        setSaveError(json.erro || "Erro ao salvar");
+        setErro(json.erro || "Erro");
+        setState("erro");
       }
     } catch {
-      setSaveError("Erro de conexão");
-    } finally {
-      setSaving(false);
+      setErro("Erro de conexão");
+      setState("erro");
     }
+  }
+
+  function inicializarGoogle() {
+    if (window.google?.accounts?.id) return renderizarBotao();
+    const s = document.createElement("script");
+    s.src = "https://accounts.google.com/gsi/client";
+    s.async = true;
+    s.defer = true;
+    s.onload = renderizarBotao;
+    document.body.appendChild(s);
+  }
+
+  function renderizarBotao() {
+    window.google.accounts.id.initialize({
+      client_id: process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID,
+      callback: handleCredential,
+    });
+    const el = document.getElementById("g_id_signin");
+    if (el) {
+      window.google.accounts.id.renderButton(el, {
+        theme: "outline",
+        size: "large",
+        text: "signin_with",
+        locale: "pt-BR",
+      });
+    }
+  }
+
+  async function handleCredential(response) {
+    const res = await fetch("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ credential: response.credential }),
+    });
+    const json = await res.json();
+    if (json.ok) {
+      setEmail(json.email);
+      carregarDados();
+    } else {
+      setErro(json.erro || "Falha no login");
+      setState("erro");
+    }
+  }
+
+  async function sair() {
+    await fetch("/api/auth/logout", { method: "POST" });
+    setData(null);
+    setState("login");
+    inicializarGoogle();
+  }
+
+  function limparFiltros() {
+    setBusca("");
+    setFiltroSimples("");
+    setFiltroA("");
+    setFiltroB("");
   }
 
   if (state === "loading") {
     return <main style={{ padding: 40, fontFamily: "system-ui" }}>Carregando…</main>;
   }
 
-  if (state === "erro") {
+  if (state === "login") {
     return (
-      <main style={{ padding: 40, fontFamily: "system-ui", maxWidth: 720, margin: "0 auto" }}>
-        <Link href="/" style={{ color: "#2563eb", textDecoration: "none" }}>← Voltar</Link>
-        <h1 style={{ marginTop: 16 }}>Ops</h1>
-        <p style={{ color: "#c00" }}>{erro}</p>
+      <main style={{ maxWidth: 420, margin: "6rem auto", padding: "0 1rem", fontFamily: "system-ui", textAlign: "center" }}>
+        <h1>Acesso restrito</h1>
+        <p style={{ color: "#555", fontSize: 14 }}>
+          Faça login com uma conta autorizada para visualizar os dados.
+        </p>
+        <div id="g_id_signin" style={{ display: "flex", justifyContent: "center", marginTop: 24 }} />
       </main>
     );
   }
 
-  const sexo = patient.values["Demograficos||Sexo"] || "";
-  const idade = patient.values["Demograficos||Idade_atual_anos"] || "";
-  const etnia = patient.values["Demograficos||Etnia"] || "";
+  if (state === "erro") {
+    return (
+      <main style={{ maxWidth: 480, margin: "6rem auto", padding: "0 1rem", fontFamily: "system-ui", textAlign: "center" }}>
+        <h1>Não foi possível acessar</h1>
+        <p style={{ color: "#c00" }}>{erro}</p>
+        <button onClick={sair} style={{ marginTop: 16, padding: "8px 16px", cursor: "pointer" }}>Voltar</button>
+      </main>
+    );
+  }
 
-  const changedCount = editing
-    ? columns.filter((c) => {
-        if (!c.subtopic) return false;
-        const key = `${c.topic}||${c.subtopic}`;
-        if (key === "POL||ID") return false;
-        return (patient.values[key] || "") !== (draft[key] ?? "");
-      }).length
-    : 0;
+  const { patients } = data;
+
+  // Aplicar filtros
+  let filtrados = patients;
+  if (busca) {
+    filtrados = filtrados.filter((p) => String(p.id).toLowerCase().includes(busca.toLowerCase()));
+  }
+  if (filtroSimples) {
+    const m = MANIFESTACOES.find((x) => x.key === filtroSimples);
+    if (m) filtrados = filtrados.filter((p) => temManifestacao(p, m));
+  }
+  if (filtroA && filtroB) {
+    const mA = MANIFESTACOES.find((x) => x.key === filtroA);
+    const mB = MANIFESTACOES.find((x) => x.key === filtroB);
+    if (mA && mB) {
+      filtrados = filtrados.filter((p) => {
+        const temA = temManifestacao(p, mA);
+        const temB = temManifestacao(p, mB);
+        return uniaoTipo === "E" ? temA && temB : temA || temB;
+      });
+    }
+  }
+
+  const temFiltroAtivo = busca || filtroSimples || (filtroA && filtroB);
 
   return (
-    <main style={{ padding: "2rem", fontFamily: "system-ui", maxWidth: 960, margin: "0 auto" }}>
-      <Link href="/" style={{ color: "#2563eb", textDecoration: "none", fontSize: 14 }}>← Voltar para a lista</Link>
-
-      <header style={{ marginTop: 16, marginBottom: 24, padding: "20px 24px", background: "#f9fafb", borderRadius: 12, border: "1px solid #e5e7eb" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
-          <div>
-            <h1 style={{ margin: 0 }}>Paciente #{patient.id}</h1>
-            <div style={{ fontSize: 14, color: "#666", marginTop: 6 }}>
-              {[sexo, idade && `${idade} anos`, etnia].filter(Boolean).join(" · ")}
-            </div>
-          </div>
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            {saveOk && <span style={{ color: "#16a34a", fontSize: 13 }}>✓ Salvo</span>}
-            {!editing ? (
-              <button onClick={startEdit} style={{ padding: "8px 16px", cursor: "pointer", border: "1px solid #2563eb", background: "#fff", color: "#2563eb", borderRadius: 6, fontWeight: 500 }}>
-                Editar
-              </button>
-            ) : (
-              <>
-                <button onClick={cancelEdit} disabled={saving} style={{ padding: "8px 16px", cursor: "pointer", border: "1px solid #d1d5db", background: "#fff", borderRadius: 6 }}>
-                  Cancelar
-                </button>
-                <button onClick={saveEdits} disabled={saving || changedCount === 0} style={{ padding: "8px 16px", cursor: changedCount === 0 ? "not-allowed" : "pointer", border: "none", background: changedCount === 0 ? "#93c5fd" : "#2563eb", color: "#fff", borderRadius: 6, fontWeight: 500 }}>
-                  {saving ? "Salvando…" : `Salvar${changedCount > 0 ? ` (${changedCount})` : ""}`}
-                </button>
-              </>
-            )}
-          </div>
+    <main style={{ padding: "2rem", fontFamily: "system-ui", maxWidth: 1400, margin: "0 auto" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, gap: 16, flexWrap: "wrap" }}>
+        <div>
+          <h1 style={{ margin: 0 }}>Pacientes</h1>
+          <p style={{ margin: "4px 0 0", fontSize: 13, color: "#666" }}>
+            {filtrados.length} de {patients.length} registros · logado como {email}
+          </p>
         </div>
-        {saveError && <p style={{ color: "#c00", marginTop: 12, marginBottom: 0, fontSize: 13 }}>{saveError}</p>}
-
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 16 }}>
-          {MANIFESTACOES.map((m) => {
-            const ativo = temManifestacao(patient, m);
-            return (
-              <span key={m.key} title={`${m.label}: ${ativo ? "presente" : "ausente"}`} style={{
-                display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 10px",
-                borderRadius: 999, fontSize: 13,
-                background: ativo ? `${m.color}22` : "#f3f4f6",
-                border: ativo ? `1px solid ${m.color}66` : "1px solid transparent",
-                color: ativo ? "#111827" : "#9ca3af",
-                opacity: ativo ? 1 : 0.6,
-              }}>
-                <span style={{ fontSize: 16 }}>{m.icon}</span>
-                {m.label}
-                <strong style={{ marginLeft: 2 }}>{ativo ? "·" : "—"}</strong>
-              </span>
-            );
-          })}
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <input
+            type="text"
+            placeholder="Buscar por código…"
+            value={busca}
+            onChange={(e) => setBusca(e.target.value)}
+            style={{ padding: "8px 12px", border: "1px solid #ddd", borderRadius: 6, fontSize: 14 }}
+          />
+          <button onClick={sair} style={{ padding: "8px 16px", cursor: "pointer" }}>Sair</button>
         </div>
-      </header>
+      </div>
 
-      {topics.map((topic) => {
-        const subs = columns
-          .filter((c) => c.topic === topic && c.subtopic)
-          .map((c) => ({
-            topic: c.topic,
-            subtopic: c.subtopic,
-            key: `${c.topic}||${c.subtopic}`,
-            value: limparTexto(patient.values[`${c.topic}||${c.subtopic}`]),
-          }));
+      <div style={{
+        marginBottom: 16, padding: "12px 16px", background: "#f9fafb",
+        border: "1px solid #e5e7eb", borderRadius: 10,
+        display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center",
+      }}>
+        <span style={{ fontSize: 13, fontWeight: 500, color: "#374151" }}>Filtrar por:</span>
 
-        // No modo view, ocultar tópicos em que TUDO está vazio
-        if (!editing && subs.every((s) => !s.value)) return null;
+        <select value={filtroSimples} onChange={(e) => setFiltroSimples(e.target.value)} style={{ padding: "6px 10px", border: "1px solid #d1d5db", borderRadius: 6, fontSize: 13 }}>
+          <option value="">Todas</option>
+          {MANIFESTACOES.map((m) => (
+            <option key={m.key} value={m.key}>{m.icon} {m.label}</option>
+          ))}
+        </select>
 
-        return (
-          <details key={topic} open style={{ marginBottom: 16, background: "#fff", border: "1px solid #e5e7eb", borderRadius: 10, overflow: "hidden" }}>
-            <summary style={{ padding: "12px 16px", cursor: "pointer", fontWeight: 600, fontSize: 15, background: "#f9fafb", display: "flex", alignItems: "center", gap: 8 }}>
-              <span>{TOPIC_ICONS[topic] || "📄"}</span>
-              <span>{topic}</span>
-            </summary>
-            <dl style={{ margin: 0, padding: "12px 16px", display: "grid", gap: 10 }}>
-              {subs.map((s) => {
-                const isBlocked = s.key === "POL||ID";
-                if (!editing) {
-                  if (!s.value) return null;
-                  return (
-                    <div key={s.subtopic} style={{ display: "grid", gridTemplateColumns: "minmax(180px, 240px) 1fr", gap: 12, borderBottom: "1px solid #f3f4f6", paddingBottom: 8 }}>
-                      <dt style={{ fontSize: 13, color: "#6b7280", fontWeight: 500 }}>{humanizarSubtopico(s.subtopic)}</dt>
-                      <dd style={{ margin: 0, fontSize: 14, color: "#111827", whiteSpace: "pre-wrap", lineHeight: 1.5 }}>{s.value}</dd>
-                    </div>
-                  );
-                }
+        <span style={{ fontSize: 13, color: "#9ca3af", margin: "0 4px" }}>ou unir:</span>
 
-                // Modo edição
-                const config = getFieldConfig(s.topic, s.subtopic, patient.values[s.key] || "");
-                const value = draft[s.key] ?? "";
+        <select value={filtroA} onChange={(e) => setFiltroA(e.target.value)} style={{ padding: "6px 10px", border: "1px solid #d1d5db", borderRadius: 6, fontSize: 13 }}>
+          <option value="">Manifestação A</option>
+          {MANIFESTACOES.map((m) => (
+            <option key={m.key} value={m.key}>{m.icon} {m.label}</option>
+          ))}
+        </select>
 
-                return (
-                  <div key={s.subtopic} style={{ display: "grid", gridTemplateColumns: "minmax(180px, 240px) 1fr", gap: 12, borderBottom: "1px solid #f3f4f6", paddingBottom: 8, alignItems: "start" }}>
-                    <dt style={{ fontSize: 13, color: "#6b7280", fontWeight: 500, paddingTop: 6 }}>{humanizarSubtopico(s.subtopic)}</dt>
-                    <dd style={{ margin: 0 }}>
-                      {isBlocked ? (
-                        <div style={{ fontSize: 14, color: "#9ca3af", paddingTop: 6 }}>{value} <span style={{ fontSize: 11 }}>(bloqueado)</span></div>
-                      ) : config.type === "select" ? (
-                        <select value={value} onChange={(e) => setField(s.key, e.target.value)} style={INPUT_STYLE}>
-                          {config.options.map((opt) => (
-                            <option key={opt} value={opt}>{opt || "(vazio)"}</option>
-                          ))}
-                        </select>
-                      ) : config.type === "textarea" ? (
-                        <textarea value={value} onChange={(e) => setField(s.key, e.target.value)} rows={3} style={{ ...INPUT_STYLE, resize: "vertical", minHeight: 60 }} />
-                      ) : (
-                        <input type="text" value={value} onChange={(e) => setField(s.key, e.target.value)} style={INPUT_STYLE} />
-                      )}
-                    </dd>
-                  </div>
-                );
-              })}
-            </dl>
-          </details>
-        );
-      })}
+        <select value={uniaoTipo} onChange={(e) => setUniaoTipo(e.target.value)} style={{ padding: "6px 10px", border: "1px solid #d1d5db", borderRadius: 6, fontSize: 13 }}>
+          <option value="E">E</option>
+          <option value="OU">OU</option>
+        </select>
+
+        <select value={filtroB} onChange={(e) => setFiltroB(e.target.value)} style={{ padding: "6px 10px", border: "1px solid #d1d5db", borderRadius: 6, fontSize: 13 }}>
+          <option value="">Manifestação B</option>
+          {MANIFESTACOES.map((m) => (
+            <option key={m.key} value={m.key}>{m.icon} {m.label}</option>
+          ))}
+        </select>
+
+        {temFiltroAtivo && (
+          <button onClick={limparFiltros} style={{ padding: "6px 12px", cursor: "pointer", border: "1px solid #d1d5db", background: "#fff", borderRadius: 6, fontSize: 13 }}>
+            Limpar
+          </button>
+        )}
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 16 }}>
+        {filtrados.map((p) => {
+          const sexo = p.values["Demograficos||Sexo"] || "";
+          const idade = p.values["Demograficos||Idade_atual_anos"] || "";
+          const etnia = p.values["Demograficos||Etnia"] || "";
+          const tcle = p.values["Controle||TCLE_coletado"] || "";
+          const aghuse = p.values["Controle||Incluido_AGHUSE"] || "";
+
+          return (
+            <Link key={p.id} href={`/paciente/${encodeURIComponent(p.id)}`} style={{ textDecoration: "none", color: "inherit" }}>
+              <div
+                style={{
+                  background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12,
+                  padding: 16, cursor: "pointer",
+                  transition: "box-shadow 0.15s, transform 0.15s",
+                  boxShadow: "0 1px 2px rgba(0,0,0,0.04)",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.boxShadow = "0 4px 12px rgba(0,0,0,0.1)";
+                  e.currentTarget.style.transform = "translateY(-2px)";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.boxShadow = "0 1px 2px rgba(0,0,0,0.04)";
+                  e.currentTarget.style.transform = "translateY(0)";
+                }}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
+                  <strong style={{ fontSize: 18 }}>Paciente #{p.id}</strong>
+                </div>
+                <div style={{ fontSize: 13, color: "#666", marginBottom: 12 }}>
+                  {[sexo, idade && `${idade} anos`, etnia].filter(Boolean).join(" · ")}
+                </div>
+
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                  {MANIFESTACOES.map((m) => {
+                    const ativo = temManifestacao(p, m);
+                    const mostrando = hoveredIcon?.patientId === p.id && hoveredIcon?.manifKey === m.key;
+                    const detalhes = mostrando ? getManifestacaoDetalhes(p, m) : [];
+
+                    return (
+                      <div
+                        key={m.key}
+                        style={{ position: "relative" }}
+                        onMouseEnter={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setHoveredIcon({ patientId: p.id, manifKey: m.key });
+                        }}
+                        onMouseLeave={() => setHoveredIcon(null)}
+                      >
+                        <span
+                          style={{
+                            display: "inline-flex", alignItems: "center", justifyContent: "center",
+                            width: 30, height: 30, borderRadius: 8, fontSize: 16,
+                            background: ativo ? `${m.color}22` : "#f3f4f6",
+                            border: ativo ? `1px solid ${m.color}66` : "1px solid transparent",
+                            opacity: ativo ? 1 : 0.35,
+                            filter: ativo ? "none" : "grayscale(1)",
+                          }}
+                        >
+                          {m.icon}
+                        </span>
+
+                        {mostrando && (
+                          <div
+                            style={{
+                              position: "absolute", bottom: "100%", left: "50%",
+                              transform: "translateX(-50%)", marginBottom: 8,
+                              background: "#1f2937", color: "#fff", padding: 12,
+                              borderRadius: 8, fontSize: 12, zIndex: 1000,
+                              width: 260, boxShadow: "0 8px 20px rgba(0,0,0,0.3)",
+                              pointerEvents: "none", lineHeight: 1.4,
+                            }}
+                          >
+                            <div style={{ fontWeight: 600, marginBottom: 6, display: "flex", alignItems: "center", gap: 6 }}>
+                              <span>{m.icon}</span>
+                              <span>{m.label}</span>
+                              <span style={{ marginLeft: "auto", fontSize: 10, opacity: 0.6 }}>
+                                {ativo ? "presente" : "ausente"}
+                              </span>
+                            </div>
+                            {detalhes.length === 0 ? (
+                              <div style={{ opacity: 0.7, fontStyle: "italic" }}>Sem detalhes registrados.</div>
+                            ) : (
+                              detalhes.map((d) => (
+                                <div key={d.field} style={{ marginTop: 4 }}>
+                                  <span style={{ color: "#9ca3af" }}>{d.label}: </span>
+                                  <span>{d.value}</span>
+                                </div>
+                              ))
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div style={{ display: "flex", gap: 6, marginTop: 12, fontSize: 11 }}>
+                  <span style={{
+                    padding: "2px 8px", borderRadius: 4,
+                    background: tcle === "Sim" ? "#dcfce7" : "#f3f4f6",
+                    color: tcle === "Sim" ? "#166534" : "#9ca3af",
+                    fontWeight: 500,
+                  }}>
+                    TCLE {tcle === "Sim" ? "✓" : "—"}
+                  </span>
+                  <span style={{
+                    padding: "2px 8px", borderRadius: 4,
+                    background: aghuse === "Sim" ? "#dbeafe" : "#f3f4f6",
+                    color: aghuse === "Sim" ? "#1e40af" : "#9ca3af",
+                    fontWeight: 500,
+                  }}>
+                    AGHUSE {aghuse === "Sim" ? "✓" : "—"}
+                  </span>
+                </div>
+              </div>
+            </Link>
+          );
+        })}
+      </div>
+
+      {filtrados.length === 0 && (
+        <p style={{ marginTop: 40, color: "#999", textAlign: "center" }}>Nenhum paciente encontrado.</p>
+      )}
     </main>
   );
 }
