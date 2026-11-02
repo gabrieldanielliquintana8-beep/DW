@@ -1,24 +1,51 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import {
-  MANIFESTACOES,
-  temManifestacao,
-  getManifestacaoDetalhes,
-  parseDate,
-  toBRDisplay,
-} from "@/lib/patients";
+import { MANIFESTACOES, temManifestacao } from "@/lib/patients";
 
-const DIAS_SEMANA = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
+// ===== Helpers auto-contidos (não dependem de lib/patients.js) =====
+function parseDateLocal(str) {
+  if (!str) return null;
+  const s = String(str).trim();
+  let m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (m) return new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]));
+  return null;
+}
+
+function toBRDisplayLocal(str) {
+  if (!str) return "";
+  const d = parseDateLocal(str);
+  if (!d || isNaN(d)) return String(str);
+  return `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}/${d.getFullYear()}`;
+}
+
+function detalhesManifestacao(patient, categoria) {
+  const detalhes = [];
+  if (!patient?.values) return detalhes;
+  for (const field of categoria.fields) {
+    const v = patient.values[`${categoria.key}||${field}`];
+    if (v && String(v).trim()) {
+      detalhes.push({
+        field,
+        label: String(field).replace(/_/g, " ").trim(),
+        value: String(v),
+      });
+    }
+  }
+  return detalhes;
+}
 
 function isoFromDate(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
+const DIAS_SEMANA = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
+
 export default function Home() {
   const router = useRouter();
 
-  // ---- Todos os hooks PRIMEIRO (nunca depois de return) ----
   const [state, setState] = useState("loading");
   const [data, setData] = useState(null);
   const [email, setEmail] = useState("");
@@ -77,8 +104,8 @@ export default function Home() {
   const consultasPorDia = useMemo(() => {
     const map = new Map();
     for (const p of filtrados) {
-      const raw = p.values["Agenda||Proxima_consulta"] || "";
-      const d = parseDate(raw);
+      const raw = (p.values && p.values["Agenda||Proxima_consulta"]) || "";
+      const d = parseDateLocal(raw);
       if (!d) continue;
       d.setHours(0, 0, 0, 0);
       const key = isoFromDate(d);
@@ -90,7 +117,6 @@ export default function Home() {
 
   const hojeKey = useMemo(() => isoFromDate(new Date()), []);
 
-  // ---- Funções auxiliares ----
   async function carregarDados() {
     try {
       const res = await fetch("/api/dados");
@@ -114,6 +140,7 @@ export default function Home() {
   }
 
   function inicializarGoogle() {
+    if (typeof window === "undefined") return;
     if (window.google?.accounts?.id) return renderizarBotao();
     const s = document.createElement("script");
     s.src = "https://accounts.google.com/gsi/client";
@@ -124,6 +151,7 @@ export default function Home() {
   }
 
   function renderizarBotao() {
+    if (typeof window === "undefined" || !window.google?.accounts?.id) return;
     window.google.accounts.id.initialize({
       client_id: process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID,
       callback: handleCredential,
@@ -205,7 +233,6 @@ export default function Home() {
     setFiltroB("");
   }
 
-  // ---- Só agora os returns condicionais ----
   if (state === "loading") {
     return <main style={{ padding: 40, fontFamily: "system-ui" }}>Carregando…</main>;
   }
@@ -237,6 +264,7 @@ export default function Home() {
     ? consultasPorDia.get(diaSelecionado) || []
     : [];
   const temFiltroAtivo = busca || filtroSimples || (filtroA && filtroB);
+  const offsetInicial = dias.length > 0 ? dias[0].getDay() : 0;
 
   return (
     <main style={{ padding: "2rem", fontFamily: "system-ui", maxWidth: 1400, margin: "0 auto" }}>
@@ -259,13 +287,11 @@ export default function Home() {
         </div>
       </div>
 
-      <div
-        style={{
-          marginBottom: 16, padding: "12px 16px", background: "#f9fafb",
-          border: "1px solid #e5e7eb", borderRadius: 10,
-          display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center",
-        }}
-      >
+      <div style={{
+        marginBottom: 16, padding: "12px 16px", background: "#f9fafb",
+        border: "1px solid #e5e7eb", borderRadius: 10,
+        display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center",
+      }}>
         <span style={{ fontSize: 13, fontWeight: 500, color: "#374151" }}>Filtrar por:</span>
         <select value={filtroSimples} onChange={(e) => setFiltroSimples(e.target.value)}
           style={{ padding: "6px 10px", border: "1px solid #d1d5db", borderRadius: 6, fontSize: 13 }}>
@@ -298,17 +324,16 @@ export default function Home() {
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 16 }}>
         {filtrados.map((p) => {
-          const sexo = p.values["Demograficos||Sexo"] || "";
-          const idade = p.values["Demograficos||Idade_atual_anos"] || "";
-          const etnia = p.values["Demograficos||Etnia"] || "";
-          const tcle = p.values["Controle||TCLE_coletado"] || "";
-          const aghuse = p.values["Controle||Incluido_AGHUSE"] || "";
+          const v = p.values || {};
+          const sexo = v["Demograficos||Sexo"] || "";
+          const idade = v["Demograficos||Idade_atual_anos"] || "";
+          const etnia = v["Demograficos||Etnia"] || "";
+          const tcle = v["Controle||TCLE_coletado"] || "";
+          const aghuse = v["Controle||Incluido_AGHUSE"] || "";
           const tcleOn = tcle === "Sim";
           const aghuseOn = aghuse === "Sim";
-          const proxima = p.values["Agenda||Proxima_consulta"] || "";
-          const ultima = p.values["Agenda||Ultima_consulta"] || "";
-          const proximaDisplay = toBRDisplay(proxima);
-          const ultimaDisplay = toBRDisplay(ultima);
+          const proximaDisplay = toBRDisplayLocal(v["Agenda||Proxima_consulta"] || "");
+          const ultimaDisplay = toBRDisplayLocal(v["Agenda||Ultima_consulta"] || "");
 
           return (
             <div
@@ -340,7 +365,7 @@ export default function Home() {
                 {MANIFESTACOES.map((m) => {
                   const ativo = temManifestacao(p, m);
                   const mostrando = hoveredIcon?.patientId === p.id && hoveredIcon?.manifKey === m.key;
-                  const detalhes = mostrando ? getManifestacaoDetalhes(p, m) : [];
+                  const detalhes = mostrando ? detalhesManifestacao(p, m) : [];
                   return (
                     <div key={m.key} style={{ position: "relative" }}
                       onMouseEnter={() => setHoveredIcon({ patientId: p.id, manifKey: m.key })}
@@ -431,7 +456,7 @@ export default function Home() {
           {DIAS_SEMANA.map((d) => (
             <div key={d} style={{ fontSize: 11, fontWeight: 600, color: "#9ca3af", textAlign: "center", padding: "4px 0" }}>{d}</div>
           ))}
-          {Array.from({ length: dias.length > 0 ? dias[0].getDay() : 0 }).map((_, i) => (
+          {Array.from({ length: offsetInicial }).map((_, i) => (
             <div key={`pad-${i}`} />
           ))}
           {dias.map((d) => {
