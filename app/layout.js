@@ -1,4 +1,4 @@
-export const metadata = { title: "Cadastro Seguro" };
+export const metadata = { title: "Painel de Dados" };
 
 export default function RootLayout({ children }) {
   return (
